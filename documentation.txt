@@ -1,0 +1,10 @@
+Documentation and protocol for Serranon Operating System
+
+Strings:
+ - All strings must be terminated with 0 or null
+Filesystem:
+ - FAT16 (little endian)
+
+ 
+Instruction Flow:
+    Bootloader loads the base kernel into a place below the bootloader
