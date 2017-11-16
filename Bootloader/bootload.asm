@@ -11,7 +11,7 @@ dw 512 ; BPB_BytsPerSec, use 512 bytes per sector
 db 1 ; dont really use clusters, BPB_SecPerClus
 dw 1 ; how many sectors are reserved for boot
 db 2 ; there are two file allocation tables...
-dw 512 ; number of directory entries so may need to change this when I actually understand how FAT works
+dw 256 ; number of root directory entries (32 bits for one short or long entry, 16 sectors)
 dw 65535 ; how many logical sectors, so 65535 * 512 = 33553920 bytes we can use
 db 0xF8 ; media type
 dw 16 ; use sixteen sectors per FAT
@@ -29,16 +29,20 @@ db 'FAT16   ' ; useless identification for compatibility
 
 
 start:
-    cli
+    cli ; disable interrupts
     mov ax, 0x0700
     mov ss, ax; can't move direct value to ss, using ss so stack has a bottom
     mov sp, 0x0BFA ; move the stack to just before the bootloader (6 bytes?)
     sti ; restore them interrupts
     
+    mov [disknumber], dl ; the bios should put the boot device number into dl
     mov ax, 0
     mov ds, ax ; reset data segment because we are using ORG
     
     call PrintString ; print the string
+    call LoadKernel
+    call JumpToKernel
+    
     jmp $ ; halt the processor, program ended
 
 PrintString: ; location of string is in bp
@@ -61,6 +65,28 @@ PrintString: ; location of string is in bp
 .done:
     ret
 
+LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_FATSz16 (16)) = 33 (16 secs for root directory)
+    mov dl, [disknumber] ; set number to get info from
+    mov ax, 0
+    mov es, ax
+    mov di, ax ; fix bugs
+    mov ah, 8 ; code for get drive info
+    clc
+    int 13h
+    jc .error ; was CF set on error
+    ; TODO: CALCULATE SIDE TRACK SECTOR AND LOAD KERNEL TO MEM
+.error:
+    ret ; go back to hlt, error
+    
+; JumpToKernel: Sets up protected mode and jumps to the kernel at kernel_address
+JumpToKernel:
+    ;TODO
+    
+    
+    
 print_str db 'Loading the operating system...', 0 ; 0 is the standard termination
+kern_filename db 'KERN      X', 0 ; we will be searching for the short entry in the root directory "FAT"
+disknumber db 0
+kernel_address dw 0x8000 ; load kernel at 32k
 times 510 - ($ - $$) db 0 ; allow the boot signature to be in the last two bytes
 dw 0xAA55 ; the boot sig

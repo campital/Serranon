@@ -1,5 +1,7 @@
 # Serranon
 ## A 32-bit, protected mode operating system for (what)
+CURRENT STATUS: The current source is still in development and may not work.
+Wait until a full release. 
 
 Documentation/spec is located in documentation.txt and is hopefully updated.
 
@@ -11,6 +13,9 @@ Resources:
 * Osdev Wiki
 * Wikipedia
 * Bran's Kernel
-* MS Dos
+* MS-DOS
+* fatgen103 (for FAT16)
+* Wikipedia
+
 
 Have a good day!
