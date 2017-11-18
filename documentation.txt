@@ -6,6 +6,7 @@ Filesystem:
  - FAT16 (little endian)
 Memory:
     The stack top is located at 0x7BFA and bottoms out at 0x7000, during the bootloader and early kernel
+    The kernel is loaded at 0x0000:0x7F00
 
  
 Instruction Flow:
