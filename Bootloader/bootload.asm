@@ -12,7 +12,7 @@ db 1 ; dont really use clusters, BPB_SecPerClus
 dw 1 ; how many sectors are reserved for boot
 db 2 ; there are two file allocation tables...
 dw 256 ; number of root directory entries (32 bits for one short or long entry, 16 sectors)
-dw 65535 ; how many logical sectors, so 65535 * 512 = 33553920 bytes we can use
+dw 8192 ; how many logical sectors, so 8192 * 512 = 4194304 bytes we can use
 db 0xF8 ; media type
 dw 16 ; use sixteen sectors per FAT
 dw 32 ; dont think tracks matter, NUM SECTORS PER TRACK
@@ -39,8 +39,8 @@ start:
     mov ax, 0
     mov ds, ax ; reset data segment because we are using ORG
     
-     ; print the string
     call LoadKernel
+    mov bp, print_str
     call PrintString
     call JumpToKernel
     
@@ -50,7 +50,8 @@ PrintString: ; location of string is in bp
     xor cx, cx ; set cx to 0
 .loop:
     mov bx, cx
-    mov al, [print_str + bx] ; char to print
+    add bx, bp
+    mov al, [bx] ; char to print
     
     cmp al, 0
     je .done ; if the string is not terminated or longer than max string length, continue, or else ret
@@ -67,6 +68,9 @@ PrintString: ; location of string is in bp
     ret
 
 LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_FATSz16 (16)) = 33 (16 secs for root directory)
+    xor ah, ah ; for drive reset
+    int 13h
+    
     mov dl, [disknumber] ; set number to get info from
     mov ax, 0
     mov es, ax
@@ -80,11 +84,48 @@ LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_
     mov [sectors_per_track], cx ; choose the sectors per track
     pop cx
     
-    and cx, 0xFFC0
-    shr cx, 6 ; isolate
-    mov [tracks_per_head], cx
+    mov [hdd_head_amt], dh
     
     mov ax, 33 ; 33 is where the data starts
+    mov bl, 16 ; read 16 sectors
+    call LoadFileFromSector ; load
+    
+    mov si, 0x7EE0 ; 32 bytes before start of buffer
+    mov di, kern_filename
+    mov ax, si
+    mov bx, di ; backup
+.compare:
+    add ax, 32
+    mov si, ax
+    mov di, bx
+    mov cx, 9 ; the string is 9 bytes long
+    rep cmpsb ; compare
+    jne .compare
+    
+    mov si, ax ; reset
+    xor dx, dx
+    mov word ax, [si+28] ; length of file in bytes
+    add ax, 512 ; +1
+    mov bx, 512
+    div bx ; divide 512
+    mov bl, al ; result into number of sectors to read
+    mov ax, [si+26] ; move the file location into here
+    add ax, 47 ; put it at the start of data
+    call LoadFileFromSector
+    
+    ret ; return
+    
+; JumpToKernel: Sets up protected mode and jumps to the kernel at kernel_address
+JumpToKernel:
+    ;TODO
+    call 0x7F00
+    
+    ret
+
+LoadFileFromSector: ; ax = sector number bl=number of sectors to read into 0x7F00
+    inc ax ; muy neccesito
+    xor bh, bh ; set bh to 0
+    push bx ; save for later
     xor dx, dx ; set dx to zero for division
     div word [sectors_per_track] ; get number of sectors
     and dx, 0x003F ; should already be
@@ -93,18 +134,19 @@ LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_
     xor dx, dx ; set dx to zero
     cmp ax, 0
     je .zero
-    div word [tracks_per_head] ; track number is already in ax
+    ; award for most time spent on a single line:
+    div word [hdd_head_amt] ; track number is already in ax head number is found using a modulo formula
     jmp .normal
 .zero:
     mov dx, ax ; ax is number of tracks
     xor ax, ax ; head number if 0 = 0
 .normal:
-    mov bx, dx ; extra register
+    mov bx, ax ; extra register
     shl bx, 6 ; give space for sector number that is already in cx
     or cx, bx ; combine the track number into cx
-    mov dh, al ; should move the head number to dh
+    mov dh, dl ; should move the head number to dh
     
-    mov al, 16 ; read 16 sectors
+    pop ax ; put old bl into al
     mov ah, 2 ; read sector
     ; already have track number
     ; already have sector number
@@ -112,26 +154,21 @@ LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_
     mov dl, [disknumber]
     xor bx, bx ; set bx to 0
     mov es, bx ; just to make sure
-    mov bx, 0x7F00 ; where to load the kernel
+    mov bx, 0x7F00 ; where to load 
     clc
-    int 0x13 ; LOAD THE KERNEL!
+    int 0x13 ; LOAD!
     jc .error
     ret
-    
 .error:
-    jmp $ ; dont return
-    
-; JumpToKernel: Sets up protected mode and jumps to the kernel at kernel_address
-JumpToKernel:
-    ;TODO
-    
+    mov bp, hd_error
+    jmp $ ; endless loop
     
     
 print_str db 'Loaded the operating system!', 0 ; 0 is the standard termination
-kern_filename db 'KERN      X', 0 ; we will be searching for the short entry in the root directory "FAT"
+hd_error db 'Hard disk error!', 0
+kern_filename db 'KERN    X', 0 ; we will be searching for the short entry in the root directory "FAT"
 disknumber db 0
-kernel_address dw 0x8000 ; load kernel at 32k
+hdd_head_amt db 0
 sectors_per_track dw 0
-tracks_per_head dw 0
 times 510 - ($ - $$) db 0 ; allow the boot signature to be in the last two bytes
 dw 0xAA55 ; the boot sig
