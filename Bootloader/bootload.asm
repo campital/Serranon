@@ -30,21 +30,25 @@ db 'FAT16   ' ; useless identification for compatibility
 
 start:
     cli ; disable interrupts
-    mov ax, 0x0700
+    mov ax, 0
     mov ss, ax; can't move direct value to ss, using ss so stack has a bottom
-    mov sp, 0x0BFA ; move the stack to just before the bootloader (6 bytes?)
+    mov sp, 0x7BFA ; move the stack to just before the bootloader (6 bytes?)
     sti ; restore them interrupts
     
     mov [disknumber], dl ; the bios should put the boot device number into dl
     mov ax, 0
     mov ds, ax ; reset data segment because we are using ORG
     
-    call LoadKernel
-    mov bp, print_str
-    call PrintString
-    call JumpToKernel
+    mov ah, 2 ; set cursor pos
+    mov bh, 0 ; no page number
+    mov dh, 0
+    mov dl, 0 ; col 0 row 0
+    int 0x10 ; set pos
     
-    jmp $ ; halt the processor, program ended
+    mov bp, print_str
+    call PrintString ; loading has begun
+    call LoadKernel
+    jmp 0x7F00 ; execute the kernel code, still in real mode    
 
 PrintString: ; location of string is in bp
     xor cx, cx ; set cx to 0
@@ -114,13 +118,6 @@ LoadKernel: ; FirstRootDirSecNum = BPB_ResvdSecCnt (1) + (BPB_NumFATs (2) * BPB_
     call LoadFileFromSector
     
     ret ; return
-    
-; JumpToKernel: Sets up protected mode and jumps to the kernel at kernel_address
-JumpToKernel:
-    ;TODO
-    call 0x7F00
-    
-    ret
 
 LoadFileFromSector: ; ax = sector number bl=number of sectors to read into 0x7F00
     inc ax ; muy neccesito
@@ -164,7 +161,7 @@ LoadFileFromSector: ; ax = sector number bl=number of sectors to read into 0x7F0
     jmp $ ; endless loop
     
     
-print_str db 'Loaded the operating system!', 0 ; 0 is the standard termination
+print_str db 'Loading the operating system...', 0 ; 0 is the standard termination
 hd_error db 'Hard disk error!', 0
 kern_filename db 'KERN    X', 0 ; we will be searching for the short entry in the root directory "FAT"
 disknumber db 0

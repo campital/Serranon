@@ -7,6 +7,8 @@ Filesystem:
 Memory:
     The stack top is located at 0x7BFA and bottoms out at 0x7000, during the bootloader and early kernel
     The kernel is loaded at 0x0000:0x7F00, and so is disk buffer during the bootloader
+    The IDT is from 0-2047 in memory
+    The GDT starts at 0x800, or 2048
 
  
 Instruction Flow:
