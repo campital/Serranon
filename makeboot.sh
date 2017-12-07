@@ -11,16 +11,20 @@ cd ..
 cd src
 for i in *.asm
 do
-nasm -fbin $i -o `basename $i .asm`.x
+nasm -felf $i -o `basename $i .asm`.o
 done
-
+for i in *.c
+do
+gcc $i -o `basename $i .c`.o -Wall -O -fstrength-reduce -m32 -fomit-frame-pointer -finline-functions -nostdinc -fno-builtin -c
+done
 cd ..
-dd if=/dev/zero of=Serranon.img bs=4194304 count=1
+ld -T c_link.ld -m elf_i386 -o kern.x src/kern.o src/kernc.o
+dd if=/dev/zero of=Serranon.img bs=737280 count=1
 dd status=noxfer conv=notrunc if=Bootloader/bootload.x of=Serranon.img bs=512
 mkdir programs_temp
 mount -o loop Serranon.img programs_temp
 sleep .01
-cp src/kern.x programs_temp/
+cp kern.x programs_temp/
 sleep .01
 umount programs_temp
 rm -rf programs_temp

@@ -1,4 +1,3 @@
-ORG 0x7F00
 BITS 16
 %define GDT_START 0x800
 %define NUM_GDT_ENTRIES 5 ; MUST CHANGE THIS=======IMPORTANT=======
@@ -18,7 +17,8 @@ BITS 16
     mov byte [temp_isr_code], %1
     jmp HandleInterrupt
 %endmacro
-
+GLOBAL start ; for the linker script
+EXTERN kernel_c ; the c part of the kernel
 start:
     mov esi, 0 ; base
     mov [GDT_START], esi
@@ -204,8 +204,6 @@ ProtectedMode:
     mov word [idt_register], (256*8)-1
     mov dword [idt_register + 2], 0
     lidt [idt_register] ; done!
-    int 0 ; just a test to make sure the CPU is ok
-    
     mov al, 10
     mov dx, 0x03D4
     out dx, al
@@ -214,10 +212,12 @@ ProtectedMode:
     out dx, al
     
     mov ecx, booted_string ; cls and write the string
-    xor ebx, ebx
-    mov bh, 0x07
-    mov bl, 1
+    xor ebx, ebx ; clear the ebx
+    mov bh, 0x07 ; white on black
+    mov bl, 1 ; clear the whole screen
     call PrintString
+    
+    call kernel_c ; enter c kernel and init paging
     
     jmp $ ; infinite loop
     
@@ -255,7 +255,23 @@ HandleInterrupt:
     mov gs, ax
     mov ss, ax
     
-    ; TODO: bsod
+    mov ecx, bsod_string ; cls and write the string
+    xor edx, edx ; clear the upper bits if edx
+    mov byte dl, [temp_isr_code]
+    and dl, 0xF0 ; get the high 4 bits
+    shr dl, 4 ; push down
+    mov dl, [hex_lookup+edx]
+    mov byte [bsod_string+bsod_len-3], dl ; should get to the hex code (may need to change if bsod string is changed)
+    xor edx, edx ; clear the upper bits if edx
+    mov byte dl, [temp_isr_code] ; replenish
+    and dl, 0x0F ; get the low 4 bits
+    mov dl, [hex_lookup+edx]
+    mov byte [bsod_string+bsod_len-2], dl
+    xor ebx, ebx ; clear the ebx
+    mov bh, 0x1F ; bsod colors
+    mov bl, 1 ; clear the whole screen
+    call PrintString
+    jmp $
     
     pop ax
     mov ds, ax
@@ -265,10 +281,10 @@ HandleInterrupt:
     mov ss, ax
     popad
     add esp, 4
-    sti
+    ; pops eflags, no need for sti
     iret
 
-PrintString: ; args: ECX: string location, ebx: high 16 - offset(in bytes) || bh - color and bl = 1 if reset whole screen
+PrintString: ; args: ECX: string location, ebx: high 16 - offset(in words (/or characters)) || bh - color and bl = 1 if reset whole screen
     pushad
     cmp bl, 1
     je .fill_screen
@@ -277,14 +293,19 @@ PrintString: ; args: ECX: string location, ebx: high 16 - offset(in bytes) || bh
     mov edi, 0xB8000
     push ebx
     shr ebx, 16
+    lea ebx, [ebx*2]
     add edi, ebx ; add offset
     pop ebx
     cld
     xor edx, edx
+    xor esi, esi
 .loooop:
-    mov byte al, [ecx+edx]
+    mov byte al, [ecx+esi]
+    inc esi
     cmp al, 0
     je .done
+    cmp al, 10 ; if it is a line ending
+    je .end_line
     mov word [edi+edx*2], ax
     inc edx
     jmp .loooop
@@ -297,6 +318,26 @@ PrintString: ; args: ECX: string location, ebx: high 16 - offset(in bytes) || bh
     rep stosw
     popad
     jmp .continue
+.end_line:
+    push ecx
+    push eax
+    push ebx
+    
+    push edx
+    shr ebx, 16
+    add edx, ebx ; add offset to edx for modulo
+    mov eax, edx ; get ready for div
+    xor edx, edx ; ready
+    mov ebx, 80
+    div ebx ; screen is 80 chars wide
+    sub ebx, edx ; get how many chars to EOL
+    pop edx
+    add edx, ebx
+    
+    pop ebx
+    pop eax
+    pop ecx
+    jmp .loooop
 .done:
     popad
     ret
@@ -334,9 +375,12 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
-    
+
 done_string db 'Done!', 0
 gdt_register dq 0
 temp_isr_code db 0
 idt_register dq 0
 booted_string db 'Hello from protected mode!', 0
+hex_lookup db '0123456789ABCDEF', 0 ; for blue screen of death
+bsod_string db 'Serranon OS has encountered an error...', 10, 'Your computer will now restart.', 10, 'Technical information:', 10, 'ISR RECIEVED AT VECTOR: 0x00', 0 ; adjust the vector number
+bsod_len equ $-bsod_string

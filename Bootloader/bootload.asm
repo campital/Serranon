@@ -12,7 +12,7 @@ db 1 ; dont really use clusters, BPB_SecPerClus
 dw 1 ; how many sectors are reserved for boot
 db 2 ; there are two file allocation tables...
 dw 256 ; number of root directory entries (32 bits for one short or long entry, 16 sectors)
-dw 8192 ; how many logical sectors, so 8192 * 512 = 4194304 bytes we can use
+dw 1440 ; how many logical sectors, so 1440 * 512 = 737280 bytes we can use
 db 0xF8 ; media type
 dw 16 ; use sixteen sectors per FAT
 dw 32 ; dont think tracks matter, NUM SECTORS PER TRACK

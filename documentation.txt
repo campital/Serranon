@@ -2,6 +2,7 @@ Documentation and protocol for Serranon Operating System
 
 Strings:
  - All strings must be terminated with 0 or null
+ - EOL is 0x0A or 10
 Filesystem:
  - FAT16 (little endian)
 Memory:
