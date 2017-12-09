@@ -1,6 +1,6 @@
 # Serranon
 ## A 32-bit, protected mode operating system for playing community made games using a wiimote
-CURRENT STATUS: Release 1.1! The bootloader is complete, and the kernel is now being developed. Fully working!
+CURRENT STATUS: Still in early development, may not work or have any visible effect.
 
 Documentation/spec is located in documentation.txt and is hopefully updated.
 
@@ -18,4 +18,5 @@ Resources:
 How to install:
 Use Etcher.io on all platforms or dd on linux to raw write the IMG file to a disk, or use an x86 emulator.
 
+If anyone has any problems with the operating system, please start a new issue ticket.
 Have a good day!

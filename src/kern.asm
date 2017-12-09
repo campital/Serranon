@@ -217,7 +217,12 @@ ProtectedMode:
     mov bl, 1 ; clear the whole screen
     call PrintString
     
-    call kernel_c ; enter c kernel and init paging
+    ; load cr3 and c
+    jmp $
+    mov eax, cr0
+    or eax, 0x80000000 ; set the highest bit of cr0
+    mov cr0, eax
+    call kernel_c ; enter c kernel
     
     jmp $ ; infinite loop
     
