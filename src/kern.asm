@@ -18,7 +18,10 @@ BITS 16
     jmp HandleInterrupt
 %endmacro
 GLOBAL start ; for the linker script
+GLOBAL PrintString
 EXTERN kernel_c ; the c part of the kernel
+EXTERN init_paging ; sets up page dir and tables
+EXTERN page_fault_handler ; c handler
 start:
     mov esi, 0 ; base
     mov [GDT_START], esi
@@ -118,6 +121,127 @@ AddGDTEntry:
     pop bx
     ret
 
+EnableA20: ; see if the 21st bit of addressing is enables for protected mode, make sure to STI after
+    cli
+    mov bx, 0
+    jmp .testA20 ; test and fix
+.enableA20:
+    ; zero is bios, here
+    cmp bx, 1
+    je .kbdA20
+    cmp bx, 2
+    je .fastA20 ; fast
+    cmp bx, 3
+    je .unavailable ; endless loop
+    
+    mov     ax,2403h ; is bios a20 supported
+    int     15h
+    mov bx, 1 ; for 8042 chip attempt
+    jb      .testA20
+    cmp     ah,0
+    jnz     .testA20
+    
+    mov ax,2401h ; enable 
+    int 15h
+    mov bx, 1 ; for 8042 chip attempt (bios may have edited bx)
+    jb .testA20 ; bios was unable to find a method of enabling a20 gate
+    cmp ah,0
+    jnz .testA20
+
+    jmp .testA20
+.testA20: ; if bx = 0, do bios, bx = 1, do kbd, if bx = 2, then do fast a20 after, if bx = 3, error
+    xor ax, ax
+    mov es, ax
+    mov byte [es:0x0510], 0x00 ; clear for testing
+    push word [es:0x0510] ; so we dont mess up
+    mov ax, 0xFFFF
+    mov es, ax
+    mov byte [es:0x0510], 0xCC ; byte to test
+    push word [es:0x0510]
+    xor ax, ax
+    mov es, ax
+    cmp byte [es:0x0510], 0xCC ; compare to see if gate 20 is enabled
+    pushf ; in case restore changes flags
+    mov ax, 0xFFFF
+    mov es, ax
+    pop word [es:0x0510]
+    xor ax, ax
+    mov es, ax
+    pop word [es:0x0510] ; restore
+    popf
+    je .enableA20 ; if it wrapped around, enable a20
+    ret ; if enabled, return
+.wait_cmd:
+    in al,0x64
+    test al,2
+    jnz .wait_cmd
+    ret
+.wait_data:
+    in al,0x64
+    test al,1
+    jz .wait_data
+    ret
+.kbdA20:
+    call .wait_cmd ; wait for start
+    mov al,0xAD ; disable kbd for a20 commands
+    out 0x64,al
+ 
+    call .wait_cmd ; wait for command to register
+    mov al,0xD0 ; read command
+    out 0x64,al
+ 
+    call .wait_data
+    in al,0x60 ; read
+    push eax
+ 
+    call .wait_cmd
+    mov al,0xD1 ; write command
+    out 0x64,al            
+ 
+    call .wait_cmd
+    pop eax ; reflect data back
+    or al,2
+    out 0x60,al
+ 
+    call .wait_cmd
+    mov al,0xAE ; re-enable 8042 kbd
+    out 0x64,al
+ 
+    call .wait_cmd ; final
+    mov bx, 2 ; fast after this
+    jmp .testA20
+.fastA20:
+    in al, 0x92
+    or al, 2
+    out 0x92, al ; other A20 enable
+    mov bx, 3
+    jmp .testA20
+.unavailable:
+    mov bp, A20_error
+    call BIOSPrintString
+    jmp $
+
+BIOSPrintString: ; location of string is in bp ==FROM BOOTLOADER==
+    xor cx, cx ; set cx to 0
+.loop:
+    mov bx, cx
+    add bx, bp
+    mov al, [bx] ; char to print
+    
+    cmp al, 0
+    je .done ; if the string is not terminated or longer than max string length, continue, or else ret
+    
+    mov ah, 0x0E ; print mode
+    mov bl, 0 ; Colors don't seem to be working
+    mov bh, 0 ; we dont need to set the page mode
+    int 0x10 ; print the char
+    inc cx ; increment the counter
+    cmp cx, 200 ; max string length
+    je .done
+    jmp .loop
+.done:
+    ret
+
 BITS 32
 ProtectedMode:
     mov ax, 8 ; data segment
@@ -211,20 +335,20 @@ ProtectedMode:
     mov dx, 0x03D5
     out dx, al
     
-    mov ecx, booted_string ; cls and write the string
-    xor ebx, ebx ; clear the ebx
-    mov bh, 0x07 ; white on black
-    mov bl, 1 ; clear the whole screen
-    call PrintString
-    
+    ; PAGING:
     ; load cr3 and c
-    jmp $
+    push dword 1000 ; init 1000 tables (max 1024)
+    push dword 0x00100000 ; where to load the page stuff
+    call init_paging ; make the call
+    add esp, 8 ; get the args off
+    mov eax, 0x00100000
+    mov cr3, eax ; set the base page directory
     mov eax, cr0
-    or eax, 0x80000000 ; set the highest bit of cr0
+    or eax, 0x80000000 ; set the highest bit of cr0 (page bit)
     mov cr0, eax
     call kernel_c ; enter c kernel
     
-    jmp $ ; infinite loop
+    hlt ; halt
     
 CreateIDTEntry: ; parameters: eax: base, ebx: offset into table (in bytes), ecx: priviledge ring called from, edx: cs selector (ring 0)
     push eax
@@ -260,7 +384,8 @@ HandleInterrupt:
     mov gs, ax
     mov ss, ax
     
-    mov ecx, bsod_string ; cls and write the string
+    cmp byte [temp_isr_code], 0x0E
+    je .isPageFault ; special code
     xor edx, edx ; clear the upper bits if edx
     mov byte dl, [temp_isr_code]
     and dl, 0xF0 ; get the high 4 bits
@@ -272,11 +397,12 @@ HandleInterrupt:
     and dl, 0x0F ; get the low 4 bits
     mov dl, [hex_lookup+edx]
     mov byte [bsod_string+bsod_len-2], dl
-    xor ebx, ebx ; clear the ebx
-    mov bh, 0x1F ; bsod colors
-    mov bl, 1 ; clear the whole screen
+    push dword 0x011F ; all at once
+    push dword 0 ; no offset
+    push dword bsod_string ; cls and write the string
     call PrintString
-    jmp $
+    add esp, 8
+    hlt
     
     pop ax
     mov ds, ax
@@ -288,9 +414,25 @@ HandleInterrupt:
     add esp, 4
     ; pops eflags, no need for sti
     iret
+.isPageFault:
+    mov eax, cr2
+    push eax ; can't push cr2 directly
+    call page_fault_handler ; c code
+    add esp, 4
+    hlt ; maybe not hlt later
 
-PrintString: ; args: ECX: string location, ebx: high 16 - offset(in words (/or characters)) || bh - color and bl = 1 if reset whole screen
+PrintString: ; args (char* string, short offset, short colorClear); COLORCLEAR: ex - 0x0107 is normal colors and clear screen
+; 0x0007 would be no clear, normal colors
     pushad
+    add esp, 36 ; account for pushad and call instruction (32 + 4)
+    pop dword ecx ; string location
+    pop dword ebx
+    shl ebx, 16 ; move to high half
+    pop dword edx ; temp, for V ABI stack thing
+    mov bx, dx
+    xchg bl, bh ; flip byte order
+    sub esp, 36+12 ; make sure c can pop it off (sub esp, 36+12<-lengthofargs)====IMPORTANT====
+    
     cmp bl, 1
     je .fill_screen
 .continue:
@@ -385,7 +527,7 @@ done_string db 'Done!', 0
 gdt_register dq 0
 temp_isr_code db 0
 idt_register dq 0
-booted_string db 'Hello from protected mode!', 0
+A20_error db 'Error while enabling gate 20! Try again or report a bug.', 0
 hex_lookup db '0123456789ABCDEF', 0 ; for blue screen of death
 bsod_string db 'Serranon OS has encountered an error...', 10, 'Your computer will now restart.', 10, 'Technical information:', 10, 'ISR RECIEVED AT VECTOR: 0x00', 0 ; adjust the vector number
 bsod_len equ $-bsod_string

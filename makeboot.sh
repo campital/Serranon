@@ -15,10 +15,10 @@ nasm -felf $i -o `basename $i .asm`.o
 done
 for i in *.c
 do
-gcc $i -o `basename $i .c`.o -Wall -O -fstrength-reduce -m32 -fomit-frame-pointer -finline-functions -nostdinc -fno-builtin -c
+gcc $i -o `basename $i .c`.o -Wall -O -fstrength-reduce -m32 -fomit-frame-pointer -finline-functions -fno-stack-protector -nostdinc -fno-builtin -fno-pie -c
 done
 cd ..
-ld -T c_link.ld -m elf_i386 -o kern.x src/kern.o src/kernc.o
+ld -T c_link.ld -m elf_i386 -o kern.x src/kern.o src/kernc.o src/exceptions.o 
 dd if=/dev/zero of=Serranon.img bs=737280 count=1
 dd status=noxfer conv=notrunc if=Bootloader/bootload.x of=Serranon.img bs=512
 mkdir programs_temp

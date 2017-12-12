@@ -48,8 +48,6 @@ start:
     mov bp, print_str
     call PrintString ; loading has begun
     call LoadKernel
-    call EnableA20
-    sti ; after enablea20
     jmp 0x7F00 ; execute the kernel code, still in real mode    
 
 PrintString: ; location of string is in bp
@@ -162,88 +160,9 @@ LoadFileFromSector: ; ax = sector number bl=number of sectors to read into 0x7F0
     mov bp, hd_error
     call PrintString
     jmp $ ; endless loop
-
-EnableA20: ; see if the 21st bit of addressing is enables for protected mode, make sure to STI after
-    cli
-    mov bx, 0
-    jmp .testA20 ; test and fix
-.enableA20:
-    cmp bx, 1
-    je .fastA20 ; fast
-    cmp bx, 2
-    je .unavailable ; endless loop
-    call .wait_cmd ; wait for finish
-    mov al,0xAD ; disable kbd for a20 commands
-    out 0x64,al
- 
-    call .wait_cmd ; wait for command to register
-    mov al,0xD0 ; read command
-    out 0x64,al
- 
-    call .wait_data
-    in al,0x60 ; read
-    push eax
- 
-    call .wait_cmd
-    mov al,0xD1 ; write command
-    out 0x64,al            
- 
-    call .wait_cmd
-    pop eax ; reflect data back
-    or al,2
-    out 0x60,al
- 
-    call .wait_cmd
-    mov al,0xAE ; re-enable 8042 kbd
-    out 0x64,al
- 
-    call .wait_cmd ; final
-    mov bx, 1 ; test after this
-.testA20: ; if bx = 1, then do fast a20 after, if bx = 2, crash if not a20
-    xor ax, ax
-    mov es, ax
-    mov byte [es:0x0510], 0x00 ; clear for testing
-    push word [es:0x0510] ; so we dont mess up
-    mov ax, 0xFFFF
-    mov es, ax
-    mov byte [es:0x0510], 0xCC ; byte to test
-    push word [es:0x0510]
-    xor ax, ax
-    mov es, ax
-    cmp byte [es:0x0510], 0xCC ; compare to see if gate 20 is enabled
-    pushf ; in case restore changes flags
-    mov ax, 0xFFFF
-    mov es, ax
-    pop word [es:0x0510]
-    xor ax, ax
-    mov es, ax
-    pop word [es:0x0510] ; restore
-    popf
-    je .enableA20 ; if it wrapped around, enable a20
-    ret ; if enabled, return
-.wait_cmd:
-    in al,0x64
-    test al,2
-    jnz .wait_cmd
-    ret
-.wait_data:
-    in al,0x64
-    test al,1
-    jz .wait_data
-    ret
-.fastA20:
-    in al, 0x92
-    or al, 2
-    out 0x92, al
-    mov bx, 2
-    jmp .testA20
-.unavailable:
-    mov bp, hd_error
-    call PrintString
-    jmp $
     
-print_str db 'Loading...', 0 ; 0 is the standard termination
-hd_error db 'A20/HDD Error!', 0
+print_str db 'Loading Serranon...', 0 ; 0 is the standard termination
+hd_error db 'HDD Error!', 0
 kern_filename db 'KERN    X', 0 ; we will be searching for the short entry in the root directory "FAT"
 disknumber db 0
 hdd_head_amt db 0
