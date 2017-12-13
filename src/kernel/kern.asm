@@ -335,17 +335,6 @@ ProtectedMode:
     mov dx, 0x03D5
     out dx, al
     
-    ; PAGING:
-    ; load cr3 and c
-    push dword 1000 ; init 1000 tables (max 1024)
-    push dword 0x00100000 ; where to load the page stuff
-    call init_paging ; make the call
-    add esp, 8 ; get the args off
-    mov eax, 0x00100000
-    mov cr3, eax ; set the base page directory
-    mov eax, cr0
-    or eax, 0x80000000 ; set the highest bit of cr0 (page bit)
-    mov cr0, eax
     call kernel_c ; enter c kernel
     
     hlt ; halt
@@ -422,6 +411,7 @@ HandleInterrupt:
     hlt ; maybe not hlt later
 
 PrintString: ; args (char* string, short offset, short colorClear); COLORCLEAR: ex - 0x0107 is normal colors and clear screen
+; in asm, push all as dwords
 ; 0x0007 would be no clear, normal colors
     pushad
     add esp, 36 ; account for pushad and call instruction (32 + 4)
