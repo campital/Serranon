@@ -1,48 +1,92 @@
 #include "llkernel.h"
-
-//base addr must be 4kb aligned
-// is called from assembly code, single block of memory, directory first, then page tables. Identity page
-void init_paging(unsigned int* tablesBaseAddr, unsigned int* directoryBaseAddr, unsigned int numTablesToInit)
+// base addr must be 4kb aligned
+// level 4 pages
+// num2mbits is how many 2 mebibyte pages to identity page
+void init_paging(struct page_entry* base, unsigned int num2mbitsToInit)
 {
-    unsigned int tableBaseAddr_int = (unsigned int)tablesBaseAddr;
-    for(unsigned int i = 0; i < numTablesToInit; i++)
+    unsigned int base_cast = (unsigned int) base;
+    unsigned int maxNumPML4E = (num2mbitsToInit / 262144) + 1;
+    unsigned int maxPDEP = (num2mbitsToInit / 512) + 1;
+    unsigned int combinedPDEP = 0;
+    unsigned int combined2mb = 0;
+    for(unsigned int pml4e = 0; pml4e < maxNumPML4E; pml4e++)
     {
-        // filling up the page directory
-        unsigned int dir_addr = tableBaseAddr_int+i*4096;
-        dir_addr &= 0xFFFFF000;
-        struct page_entry dir_entry = {};
-        dir_entry.present = 1;
-        dir_entry.rw = 1;
-        dir_entry.page_addr = dir_addr>>12;
-        ((struct page_entry*)directoryBaseAddr)[i] = dir_entry;
-    }
-    //initialize identity pages
-    unsigned int value = 0;
-    for(unsigned int i = 0; i < numTablesToInit; i++)
-    {
-        for(unsigned int b = 0; b < 1024; b++)
+        // for pointers to pointers to directories
+        struct page_entry pml4entry = {};
+        pml4entry.present = 1;
+        pml4entry.rw = 1;
+        pml4entry.addr = (base_cast + 4096 + (pml4e * 4096)) >> 12;
+        base[pml4e] = pml4entry;
+        
+        for(unsigned int pdep = 0; pdep < 512; pdep++)
         {
-                struct page_entry* page_entry_addr = (struct page_entry*)(tableBaseAddr_int+(i*4096+b*4)); // one int is 4 bytes
-                // identity page
-                struct page_entry page_entry_s = {};
-                page_entry_s.present = 1;
-                page_entry_s.rw = 1;
-                page_entry_s.page_addr = value;
-                *page_entry_addr = page_entry_s; // supervisor page
-                value++;
+            if(combinedPDEP++ >= maxPDEP)
+                goto OUTLOOP;
+            struct page_entry* PDPELoc = (struct page_entry*)((base_cast + 4096 + (pml4e * 4096)) + pdep*8);
+            struct page_entry PDPEntry = {};
+            PDPEntry.present = 1;
+            PDPEntry.rw = 1;
+            PDPEntry.addr = (base_cast + 4096 + 4096*512 + pdep*4096) >> 12;
+            *PDPELoc = PDPEntry;
+            for(unsigned int mb2count = 0; mb2count < 512; mb2count++)
+            {
+                if(combined2mb >= num2mbitsToInit)
+                    goto OUTLOOP;
+                map_page(base_cast, combined2mb, combined2mb, 1, 0, 1);
+                combined2mb++;
+            }
         }
     }
+    OUTLOOP: return;
 }
 
-void set_page_directory(unsigned int* address)
+void map_page(unsigned int base, unsigned int virt_page, unsigned int physical_page_mapping, byte is_present, byte is_user_page, byte rw)
 {
-    asm volatile
-    ("movl %%eax, %%cr3\n"
+    struct page_entry_2mb pageEntry = {};
+    pageEntry.present = is_present;
+    pageEntry.rw = rw;
+    pageEntry.ps = 1;
+    pageEntry.user = is_user_page;
+    pageEntry.addr = physical_page_mapping;
+    struct page_entry_2mb* addressOfEntry = (struct page_entry_2mb*)(base+4096+512*4096+virt_page*8);
+    *addressOfEntry = pageEntry;
+}
+
+unsigned int* get_physical_address(unsigned int virt_address, unsigned int* base)
+{
+    unsigned int base_cast = (unsigned int) base;
+    unsigned int virt_page = virt_address/0x200000; // page aligned
+    unsigned int virt_extra = virt_address%0x200000;
+    struct page_entry_2mb *entry = (struct page_entry_2mb*)(base_cast+4096+512*4096+virt_page*8);
+    unsigned int return_value = entry->addr;
+    return_value *= 0x200000;
+    return (unsigned int*)(return_value+virt_extra);
+}
+
+//set page base also enters long mode (but still compatibility mode)
+void set_page_base(unsigned int phys_address)
+{
+    __asm__ __volatile__
+    ("movl %%cr4, %%ebx\n"
+     "orl $0x20, %%ebx\n"
+     "movl %%ebx, %%cr4\n"
+     "jmp 1f\n"
+     "1:\n"
+     "movl %%eax, %%cr3\n"
+     "jmp 2f\n"
+     "2:\n"
+     "movl $0xc0000080, %%ecx\n"
+     "rdmsr\n"
+     "or $0x100, %%eax\n"
+     "wrmsr\n"
      "movl %%cr0, %%ebx\n"
      "orl $0x80000000, %%ebx\n"
      "movl %%ebx, %%cr0\n"
+     "jmp 3f\n"
+     "3:\n"
+     //"hlt\n"
      :
-     : "a" (address)
-     : "%ebx"
+     : "a" (phys_address)
+     : "%ebx", "%edx", "%ecx"
     );
 }

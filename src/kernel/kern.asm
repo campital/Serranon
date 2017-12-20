@@ -23,6 +23,8 @@ EXTERN kernel_c ; the c part of the kernel
 EXTERN init_paging ; sets up page dir and tables
 EXTERN page_fault_handler ; c handler
 start:
+    call EnableA20
+    sti
     mov esi, 0 ; base
     mov [GDT_START], esi
     mov [GDT_START+4], esi ; create null entry
@@ -521,3 +523,4 @@ A20_error db 'Error while enabling gate 20! Try again or report a bug.', 0
 hex_lookup db '0123456789ABCDEF', 0 ; for blue screen of death
 bsod_string db 'Serranon OS has encountered an error...', 10, 'Your computer will now restart.', 10, 'Technical information:', 10, 'ISR RECIEVED AT VECTOR: 0x00', 0 ; adjust the vector number
 bsod_len equ $-bsod_string
+supports_long_mode db 0

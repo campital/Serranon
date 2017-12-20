@@ -13,3 +13,9 @@ void page_fault_handler(unsigned int cr2)
     }
     PrintString(pageFaultString, 0, 0x011F);
 }
+
+void panic(char* error_message)
+{
+    PrintString(error_message, 0, 0x011F);
+    __asm__ __volatile__("hlt");
+}

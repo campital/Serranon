@@ -1,5 +1,5 @@
 # Serranon
-## A 32-bit, protected mode operating system for playing community made games using a wiimote
+## A 64-bit, protected mode operating system for playing community made games using a wiimote
 CURRENT STATUS: Still in early development, may not work or have any visible effect.
 
 Documentation/spec is located in documentation.txt and is hopefully updated.
