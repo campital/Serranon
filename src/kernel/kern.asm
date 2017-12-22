@@ -1,12 +1,12 @@
 BITS 16
 %define GDT_START 0x800
-%define NUM_GDT_ENTRIES 5 ; MUST CHANGE THIS=======IMPORTANT=======
+%define NUM_GDT_ENTRIES 7 ; MUST CHANGE THIS=======IMPORTANT=======
 %define IDT_START 0
 %macro ISR_NOERRCODE 1 ; this macro part is taken from jamesmolloy.co.uk
     ; I wasn't very familiar with macros
   isr%1:
     cli
-    push dword 0
+    push qword 0 ; push the whole 8 bytes
     mov byte [temp_isr_code], %1
     jmp HandleInterrupt
 %endmacro
@@ -17,18 +17,40 @@ BITS 16
     mov byte [temp_isr_code], %1
     jmp HandleInterrupt
 %endmacro
+%macro popaq 0
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax ; pop 64 bit registers
+%endmacro
+%macro pushaq 0
+    push rax ; push 64 bit registers
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+%endmacro
 GLOBAL start ; for the linker script
+GLOBAL PrintString64
 GLOBAL PrintString
+GLOBAL jump_to_x64
 EXTERN kernel_c ; the c part of the kernel
 EXTERN init_paging ; sets up page dir and tables
-EXTERN page_fault_handler ; c handler
+EXTERN page_fault_handler
 start:
     call EnableA20
     sti
+    call BIOSGetMemMap
     mov esi, 0 ; base
     mov [GDT_START], esi
     mov [GDT_START+4], esi ; create null entry
     mov edi, 0xFFFFFFFF ; limit
+    mov ah, 0b1100 ; flags
     
     mov al, 0b10010010 ; ring level 0, data segment
     mov bx, 8 ; had a null entry
@@ -43,6 +65,15 @@ start:
     call AddGDTEntry ; add it
 
     mov al, 0b11111010 ; ring level 3, code segment
+    add bx, 8
+    call AddGDTEntry ; add it
+    
+    mov ah, 0b1010 ; flags (set x64 bit)
+    mov al, 0b10010010 ; ring level 0, data segment (x64)
+    add bx, 8 ; had a null entry
+    call AddGDTEntry ; add it
+    
+    mov al, 0b10011010 ; ring level 0, code segment (x64)
     add bx, 8
     call AddGDTEntry ; add it
     
@@ -93,7 +124,7 @@ start:
     mov cr0, eax ; enable protected mode
     jmp 16:ProtectedMode ; set cs to 16 (2nd not null entry)
 
-; parameters: esi: base, edi: limit, al: access, bx: offset
+; parameters: esi: base, edi: limit, al: access, bx: offset, ah: flag byte
 AddGDTEntry:
     push bx ; preserve
     push esi
@@ -113,7 +144,9 @@ AddGDTEntry:
     mov byte [GDT_START + bx], al ; move the access parameters in (ring level, segment type)
     inc bx ; one byte
     
-    mov byte [GDT_START + bx], 0b11001111 ; 1KB granularity, high 4 bytes of limit (CHANGE IF NOT FFFF...)=======IMPORTANT=======
+    shl ah, 4
+    or ah, 0b1111 ; (CHANGE IF NOT FFFF...)=======IMPORTANT=======
+    mov byte [GDT_START + bx], ah ; 1KB granularity, high 4 bytes of limit
     inc bx ; one byte
     
     mov byte [GDT_START + bx], ch ; already in ch
@@ -243,6 +276,11 @@ BIOSPrintString: ; location of string is in bp ==FROM BOOTLOADER==
     jmp .loop
 .done:
     ret
+    
+BIOSGetMemMap: ; uses the bios interrupt E820 
+    pusha ; save registers
+    popa
+    ret
 
 BITS 32
 ProtectedMode:
@@ -253,15 +291,22 @@ ProtectedMode:
     mov gs, ax
     mov ss, ax
     
+    mov edi,0x100000 ; odd
+    mov esi,0x010000 ; even (may wrap around)
+    mov [esi],esi
+    mov [edi],edi
+    cmpsd ; see if it wrapped around
+    je .a20_error ; if it did, A20 could not be enabled in real mode
+    
     cld ; direction up
     mov ax, 0
     mov edi, 0
     mov ecx, 0x800 ; fill up the idt with zeroes
     rep stosb ; blast the bits
-    
-    mov ebx, 0
-    mov ecx, 0 ; for now
-    mov edx, 16 ; code segment selector is at 16 offset
+
+    mov ebx, 0 ; for now
+    mov ecx, 48 ; x64 code segment
+    xor edx, edx ; counter
     mov eax, isr0
     call CreateIDTEntry ; call 0
     mov eax, isr1
@@ -327,8 +372,9 @@ ProtectedMode:
     mov eax, isr31
     call CreateIDTEntry ; call 31
 
-    mov word [idt_register], (256*8)-1
+    mov word [idt_register], (128*16)-1
     mov dword [idt_register + 2], 0
+    mov dword [idt_register + 6], 0
     lidt [idt_register] ; done!
     mov al, 10
     mov dx, 0x03D4
@@ -336,81 +382,46 @@ ProtectedMode:
     mov al, 0x20 ; disable cursor
     mov dx, 0x03D5
     out dx, al
-    
+
     call kernel_c ; enter c kernel
-    
-    hlt ; halt
-    
-CreateIDTEntry: ; parameters: eax: base, ebx: offset into table (in bytes), ecx: priviledge ring called from, edx: cs selector (ring 0)
-    push eax
-    push ecx
-    push edx
-    mov word [IDT_START + ebx], ax ; low 16 base
-    add ebx, 2
-    mov word [IDT_START + ebx], dx ; selector
-    add ebx, 2
-    mov byte [IDT_START + ebx], 0 ; reserved
-    inc ebx
-    mov dl, 0b10001110 ; flags
-    shl cl, 5
-    or dl, cl ; combine
-    mov byte [IDT_START + ebx], dl ; push flags
-    inc ebx
-    shr eax, 16 ; get high bits
-    mov word [IDT_START + ebx], ax
-    add ebx, 2
-    pop edx
-    pop ecx
-    pop eax
-    ret
-    
-HandleInterrupt:
-    pushad ; push 32 bit registers
-    mov ax, ds
-    push ax
-    mov ax, 8 ; data segment
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-    
-    cmp byte [temp_isr_code], 0x0E
-    je .isPageFault ; special code
-    xor edx, edx ; clear the upper bits if edx
-    mov byte dl, [temp_isr_code]
-    and dl, 0xF0 ; get the high 4 bits
-    shr dl, 4 ; push down
-    mov dl, [hex_lookup+edx]
-    mov byte [bsod_string+bsod_len-3], dl ; should get to the hex code (may need to change if bsod string is changed)
-    xor edx, edx ; clear the upper bits if edx
-    mov byte dl, [temp_isr_code] ; replenish
-    and dl, 0x0F ; get the low 4 bits
-    mov dl, [hex_lookup+edx]
-    mov byte [bsod_string+bsod_len-2], dl
+
+    hlt ; halt (should never get to here)
+.a20_error:
     push dword 0x011F ; all at once
     push dword 0 ; no offset
-    push dword bsod_string ; cls and write the string
+    push dword A20_error ; cls and write the string
     call PrintString
     add esp, 8
-    hlt
+    hlt ; freeze
+CreateIDTEntry: ; parameters: eax: offset, ebx: priviledge ring called from, ecx: cs selector (ring 0)
+    push eax
+    push ebx
+    push ecx
+    mov word [IDT_START + edx], ax ; offset part one
+    add edx, 2
     
-    pop ax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-    mov ss, ax
-    popad
-    add esp, 4
-    ; pops eflags, no need for sti
-    iret
-.isPageFault:
-    mov eax, cr2
-    push eax ; can't push cr2 directly
-    call page_fault_handler ; c code
-    add esp, 4
-    hlt ; maybe not hlt later
+    mov word [IDT_START + edx], cx ; code segment selector
+    add edx, 2
+    
+    shl ebx, 13
+    or ebx, 0b1000111000000000
+    mov word [IDT_START + edx], bx ; flags n' stuff
+    add edx, 2
+    
+    shr eax, 16 ; get high bits
+    mov word [IDT_START + edx], ax
+    add edx, 2
+    
+    mov dword [IDT_START + edx], 0 ; don't need high 32 bits
+    add edx, 4
+    
+    mov dword [IDT_START + edx], 0 ; reserved
+    add edx, 4
+    
+    pop ecx
+    pop ebx
+    pop eax
+    ret
 
 PrintString: ; args (char* string, short offset, short colorClear); COLORCLEAR: ex - 0x0107 is normal colors and clear screen
 ; in asm, push all as dwords
@@ -481,7 +492,145 @@ PrintString: ; args (char* string, short offset, short colorClear); COLORCLEAR: 
     popad
     ret
     
+EnableFPU:
+    pushad
     
+    popad
+    ret
+    
+jump_to_x64: ; called from C (FUNCTION NEVER RETURNS!)
+    add esp, 4 ; for call instruction
+    pop eax
+    sub esp, 8
+    push dword 0 ; will be popping rax
+    push eax
+    jmp 48:jump_to_x64_p2 ; enter long mode
+    
+    BITS 64
+HandleInterrupt:
+    pushaq
+    mov ax, ds
+    push ax
+    mov ax, 40 ; data segment (x64)
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    
+    cmp byte [temp_isr_code], 0x0E
+    je .page_fault
+    xor edx, edx ; clear the upper bits if edx
+    mov byte dl, [temp_isr_code]
+    and dl, 0xF0 ; get the high 4 bits
+    shr dl, 4 ; push down
+    mov dl, [hex_lookup+edx]
+    mov byte [bsod_string+bsod_len-3], dl ; should get to the hex code (may need to change if bsod string is changed)
+    xor edx, edx ; clear the upper bits if edx
+    mov byte dl, [temp_isr_code] ; replenish
+    and dl, 0x0F ; get the low 4 bits
+    mov dl, [hex_lookup+edx]
+    mov byte [bsod_string+bsod_len-2], dl
+    push qword 0x011F ; all at once
+    push qword 0 ; no offset
+    push qword bsod_string ; cls and write the string
+    call PrintString64
+    add esp, 24
+    hlt
+    
+    pop ax
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    popaq
+    add esp, 8 ; error code
+    iretq ; pops eflags, no need for sti
+.page_fault:
+    mov rax, cr2
+    push rax
+    call page_fault_handler
+    add esp, 8
+    hlt ; for now
+    
+jump_to_x64_p2:
+    mov ax, 40 ; data segment
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    pop rax
+    call rax
+    hlt ; end of kernel
+    
+PrintString64: ; args (char* string, short offset, short colorClear); COLORCLEAR: ex - 0x0107 is normal colors and clear screen
+; in asm, push all as qwords
+; 0x0007 would be no clear, normal colors
+    pushaq
+    mov rcx, rdi ; string location
+    mov rbx, rsi
+    shl ebx, 16 ; move to high half
+    ; temp, for V ABI stack thing ALREADY IN RDX
+    mov bx, dx
+    xchg bl, bh ; flip byte order
+    
+    cmp bl, 1
+    je .fill_screen
+.continue:
+    mov byte ah, bh ; color
+    mov rdi, 0xB8000
+    push rbx
+    shr rbx, 16
+    lea rbx, [rbx*2]
+    add rdi, rbx ; add offset
+    pop rbx
+    cld
+    xor edx, edx
+    xor esi, esi
+.loooop:
+    mov byte al, [ecx+esi]
+    inc esi
+    cmp al, 0
+    je .done
+    cmp al, 10 ; if it is a line ending
+    je .end_line
+    mov word [edi+edx*2], ax
+    inc edx
+    jmp .loooop
+.fill_screen:
+    pushaq
+    mov ah, bh
+    mov al, 0
+    mov edi, 0xB8000
+    mov ecx, 2000
+    rep stosw
+    popaq
+    jmp .continue
+.end_line:
+    push rcx
+    push rax
+    push rbx
+    push rdx
+    shr ebx, 16
+    add edx, ebx ; add offset to edx for modulo
+    mov eax, edx ; get ready for div
+    xor edx, edx ; ready
+    mov ebx, 80
+    div ebx ; screen is 80 chars wide
+    sub ebx, edx ; get how many chars to EOL
+    pop rdx
+    add edx, ebx
+    
+    pop rbx
+    pop rax
+    pop rcx
+    jmp .loooop
+.done:
+    popaq
+    ret
+
 ISR_NOERRCODE 0
 ISR_NOERRCODE 1
 ISR_NOERRCODE 2
@@ -514,11 +663,13 @@ ISR_NOERRCODE 28
 ISR_NOERRCODE 29
 ISR_NOERRCODE 30
 ISR_NOERRCODE 31
+BITS 32
 
 done_string db 'Done!', 0
 gdt_register dq 0
 temp_isr_code db 0
 idt_register dq 0
+dq 0
 A20_error db 'Error while enabling gate 20! Try again or report a bug.', 0
 hex_lookup db '0123456789ABCDEF', 0 ; for blue screen of death
 bsod_string db 'Serranon OS has encountered an error...', 10, 'Your computer will now restart.', 10, 'Technical information:', 10, 'ISR RECIEVED AT VECTOR: 0x00', 0 ; adjust the vector number
