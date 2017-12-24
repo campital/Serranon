@@ -1,5 +1,6 @@
 # Serranon
 ## A 64-bit, protected mode operating system for playing community made games using a wiimote
+## This project has been DISCONTINUED in favor of a UEFI boot mechanism, requiring a major rewrite. Has moved to [https://github.com/campitlal/SerranonOS](https://github.com/campitlal/SerranonOS)
 CURRENT STATUS: Still in early development, may not work or have any visible effect.
 
 Documentation/spec is located in documentation.txt and is hopefully updated.
